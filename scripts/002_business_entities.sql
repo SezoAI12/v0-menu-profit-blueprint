@@ -392,3 +392,162 @@ CREATE POLICY "import_jobs_insert" ON public.import_jobs
 
 CREATE POLICY "import_jobs_update" ON public.import_jobs
   FOR UPDATE USING (public.is_tenant_manager_or_above(tenant_id));
+
+-- ============================================================
+-- 9. SALES DATA (volume-only, NO revenue/totals)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.sales_data (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  recipe_id UUID NOT NULL REFERENCES public.recipes(id) ON DELETE CASCADE,
+  sale_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  quantity_sold INTEGER NOT NULL CHECK (quantity_sold > 0),
+  -- STRICTLY NO price/revenue columns - volume only per SRS
+  import_job_id UUID REFERENCES public.import_jobs(id) ON DELETE SET NULL,
+  created_by UUID NOT NULL REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_sales_data_tenant ON public.sales_data(tenant_id);
+CREATE INDEX idx_sales_data_recipe ON public.sales_data(recipe_id, sale_date);
+CREATE INDEX idx_sales_data_date ON public.sales_data(tenant_id, sale_date DESC);
+
+ALTER TABLE public.sales_data ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "sales_data_select" ON public.sales_data
+  FOR SELECT USING (public.is_tenant_member(tenant_id));
+
+CREATE POLICY "sales_data_insert" ON public.sales_data
+  FOR INSERT WITH CHECK (
+    public.is_tenant_manager_or_above(tenant_id)
+    AND auth.uid() = created_by
+  );
+
+CREATE POLICY "sales_data_delete" ON public.sales_data
+  FOR DELETE USING (public.is_tenant_manager_or_above(tenant_id));
+
+-- ============================================================
+-- 10. COMPETITION TRACKING (Pro+)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS public.competitors (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  name_ar TEXT,
+  location TEXT,
+  notes TEXT,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_by UUID NOT NULL REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_competitors_tenant ON public.competitors(tenant_id);
+
+ALTER TABLE public.competitors ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "competitors_select" ON public.competitors
+  FOR SELECT USING (public.is_tenant_member(tenant_id));
+
+CREATE POLICY "competitors_insert" ON public.competitors
+  FOR INSERT WITH CHECK (
+    public.is_tenant_manager_or_above(tenant_id)
+    AND auth.uid() = created_by
+  );
+
+CREATE POLICY "competitors_update" ON public.competitors
+  FOR UPDATE USING (public.is_tenant_manager_or_above(tenant_id));
+
+CREATE POLICY "competitors_delete" ON public.competitors
+  FOR DELETE USING (public.is_tenant_manager_or_above(tenant_id));
+
+CREATE TABLE IF NOT EXISTS public.competitor_prices (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  competitor_id UUID NOT NULL REFERENCES public.competitors(id) ON DELETE CASCADE,
+  recipe_id UUID REFERENCES public.recipes(id) ON DELETE SET NULL,
+  dish_name TEXT NOT NULL,
+  price NUMERIC(12,2) NOT NULL CHECK (price >= 0),
+  observed_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  notes TEXT,
+  created_by UUID NOT NULL REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_competitor_prices_tenant ON public.competitor_prices(tenant_id);
+CREATE INDEX idx_competitor_prices_competitor ON public.competitor_prices(competitor_id);
+
+ALTER TABLE public.competitor_prices ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "competitor_prices_select" ON public.competitor_prices
+  FOR SELECT USING (public.is_tenant_member(tenant_id));
+
+CREATE POLICY "competitor_prices_insert" ON public.competitor_prices
+  FOR INSERT WITH CHECK (
+    public.is_tenant_manager_or_above(tenant_id)
+    AND auth.uid() = created_by
+  );
+
+-- ============================================================
+-- 11. ACTION PLAN (tracking recommended actions)
+-- ============================================================
+CREATE TYPE public.action_status AS ENUM ('pending', 'in_progress', 'done', 'dismissed');
+CREATE TYPE public.action_priority AS ENUM ('low', 'medium', 'high', 'critical');
+
+CREATE TABLE IF NOT EXISTS public.action_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  title_ar TEXT,
+  description TEXT,
+  description_ar TEXT,
+  priority public.action_priority NOT NULL DEFAULT 'medium',
+  status public.action_status NOT NULL DEFAULT 'pending',
+  source TEXT, -- e.g. 'ai_suggestion', 'risk_radar', 'manual'
+  related_recipe_id UUID REFERENCES public.recipes(id) ON DELETE SET NULL,
+  related_ingredient_id UUID REFERENCES public.ingredients(id) ON DELETE SET NULL,
+  assigned_to UUID REFERENCES auth.users(id),
+  due_date DATE,
+  completed_at TIMESTAMPTZ,
+  created_by UUID NOT NULL REFERENCES auth.users(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_action_items_tenant ON public.action_items(tenant_id);
+CREATE INDEX idx_action_items_status ON public.action_items(tenant_id, status);
+
+ALTER TABLE public.action_items ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "action_items_select" ON public.action_items
+  FOR SELECT USING (public.is_tenant_member(tenant_id));
+
+CREATE POLICY "action_items_insert" ON public.action_items
+  FOR INSERT WITH CHECK (
+    public.is_tenant_manager_or_above(tenant_id)
+    AND auth.uid() = created_by
+  );
+
+CREATE POLICY "action_items_update" ON public.action_items
+  FOR UPDATE USING (public.is_tenant_member(tenant_id));
+
+CREATE POLICY "action_items_delete" ON public.action_items
+  FOR DELETE USING (public.is_tenant_manager_or_above(tenant_id));
+
+-- ============================================================
+-- UPDATED_AT TRIGGERS for all business tables
+-- ============================================================
+CREATE TRIGGER suppliers_updated_at BEFORE UPDATE ON public.suppliers
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER ingredients_updated_at BEFORE UPDATE ON public.ingredients
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER overhead_updated_at BEFORE UPDATE ON public.overhead_monthly
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER recipes_updated_at BEFORE UPDATE ON public.recipes
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER recipe_items_updated_at BEFORE UPDATE ON public.recipe_items
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER competitors_updated_at BEFORE UPDATE ON public.competitors
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER action_items_updated_at BEFORE UPDATE ON public.action_items
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
