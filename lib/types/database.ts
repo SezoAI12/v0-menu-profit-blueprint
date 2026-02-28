@@ -297,11 +297,12 @@ export interface PlanLimitCheck {
 // ============================================================
 export const PLAN_LIMITS = {
   free: {
-    recipes: 25,
-    ingredients: 50,
+    recipes: 20,
+    ingredients: 30,
     suppliers: 10,
     users: 1,
     tenants: 1,
+    ai_requests_per_month: 10,
     bulk_import: false,
     ai_suggestions: false,
     competition_tracking: false,
@@ -314,6 +315,7 @@ export const PLAN_LIMITS = {
     suppliers: 50,
     users: 5,
     tenants: 3,
+    ai_requests_per_month: 100,
     bulk_import: true,
     ai_suggestions: true,
     competition_tracking: true,
@@ -326,6 +328,7 @@ export const PLAN_LIMITS = {
     suppliers: 999999,
     users: 20,
     tenants: 10,
+    ai_requests_per_month: 999999,
     bulk_import: true,
     ai_suggestions: true,
     competition_tracking: true,
@@ -333,3 +336,7 @@ export const PLAN_LIMITS = {
     risk_radar: true,
   },
 } as const
+
+// Grace period constants
+export const GRACE_PERIOD_DAYS = 7
+export type GraceMode = 'active' | 'grace' | 'locked'
