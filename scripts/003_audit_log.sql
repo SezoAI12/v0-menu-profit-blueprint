@@ -18,9 +18,9 @@ CREATE TABLE IF NOT EXISTS public.audit_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_audit_logs_tenant ON public.audit_logs(tenant_id, created_at DESC);
-CREATE INDEX idx_audit_logs_table ON public.audit_logs(tenant_id, table_name, created_at DESC);
-CREATE INDEX idx_audit_logs_record ON public.audit_logs(record_id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_tenant ON public.audit_logs(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_table ON public.audit_logs(tenant_id, table_name, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_record ON public.audit_logs(record_id);
 
 ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 
@@ -28,11 +28,13 @@ ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "audit_logs_select_owner" ON public.audit_logs
   FOR SELECT USING (public.is_tenant_owner(tenant_id));
 
--- Insert allowed via trigger (SECURITY DEFINER)
+-- Insert allowed via trigger function (SECURITY DEFINER)
 CREATE POLICY "audit_logs_insert" ON public.audit_logs
   FOR INSERT WITH CHECK (true);
 
--- Prevent UPDATE and DELETE on audit_logs
+-- ============================================================
+-- 2. PREVENT MUTATION ON AUDIT LOGS (immutable table)
+-- ============================================================
 CREATE OR REPLACE FUNCTION public.prevent_audit_log_mutation()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -54,7 +56,7 @@ CREATE TRIGGER enforce_audit_log_immutable_delete
   EXECUTE FUNCTION public.prevent_audit_log_mutation();
 
 -- ============================================================
--- 2. GENERIC AUDIT TRIGGER FUNCTION
+-- 3. GENERIC AUDIT TRIGGER FUNCTION
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.audit_trigger_func()
 RETURNS TRIGGER
@@ -93,7 +95,6 @@ BEGIN
     v_after := NULL;
   END IF;
 
-  -- Insert audit record
   INSERT INTO public.audit_logs (
     tenant_id, table_name, record_id, action,
     before_data, after_data, user_id
@@ -111,100 +112,63 @@ END;
 $$;
 
 -- ============================================================
--- 3. ATTACH AUDIT TRIGGERS TO ALL TENANT-SCOPED TABLES
+-- 4. ATTACH AUDIT TRIGGERS TO ALL TENANT-SCOPED TABLES
 -- ============================================================
 
--- Suppliers
-CREATE TRIGGER audit_suppliers
-  AFTER INSERT OR UPDATE OR DELETE ON public.suppliers
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Ingredients
-CREATE TRIGGER audit_ingredients
-  AFTER INSERT OR UPDATE OR DELETE ON public.ingredients
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Overhead Monthly
-CREATE TRIGGER audit_overhead_monthly
-  AFTER INSERT OR UPDATE OR DELETE ON public.overhead_monthly
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Recipe Categories
-CREATE TRIGGER audit_recipe_categories
-  AFTER INSERT OR UPDATE OR DELETE ON public.recipe_categories
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Recipes
-CREATE TRIGGER audit_recipes
-  AFTER INSERT OR UPDATE OR DELETE ON public.recipes
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Recipe Items
-CREATE TRIGGER audit_recipe_items
-  AFTER INSERT OR UPDATE OR DELETE ON public.recipe_items
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Import Jobs
-CREATE TRIGGER audit_import_jobs
-  AFTER INSERT OR UPDATE ON public.import_jobs
-  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
-
--- Tenant Memberships
+-- Core tenant tables
 CREATE TRIGGER audit_tenant_memberships
   AFTER INSERT OR UPDATE OR DELETE ON public.tenant_memberships
   FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
--- Tenant Subscriptions
 CREATE TRIGGER audit_tenant_subscriptions
   AFTER INSERT OR UPDATE ON public.tenant_subscriptions
   FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
--- ============================================================
--- 4. UPDATED_AT AUTO-UPDATE TRIGGER
--- ============================================================
-CREATE OR REPLACE FUNCTION public.update_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-  NEW.updated_at = now();
-  RETURN NEW;
-END;
-$$;
+-- Business entity tables
+CREATE TRIGGER audit_suppliers
+  AFTER INSERT OR UPDATE OR DELETE ON public.suppliers
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
--- Attach updated_at trigger to all tables with updated_at column
-CREATE TRIGGER set_updated_at_profiles
-  BEFORE UPDATE ON public.profiles
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_ingredients
+  AFTER INSERT OR UPDATE OR DELETE ON public.ingredients
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_tenants
-  BEFORE UPDATE ON public.tenants
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_ingredient_price_history
+  AFTER INSERT ON public.ingredient_price_history
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_memberships
-  BEFORE UPDATE ON public.tenant_memberships
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_overhead_monthly
+  AFTER INSERT OR UPDATE OR DELETE ON public.overhead_monthly
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_subscriptions
-  BEFORE UPDATE ON public.tenant_subscriptions
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_recipe_categories
+  AFTER INSERT OR UPDATE OR DELETE ON public.recipe_categories
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_suppliers
-  BEFORE UPDATE ON public.suppliers
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_recipes
+  AFTER INSERT OR UPDATE OR DELETE ON public.recipes
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_ingredients
-  BEFORE UPDATE ON public.ingredients
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_recipe_items
+  AFTER INSERT OR UPDATE OR DELETE ON public.recipe_items
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_overhead
-  BEFORE UPDATE ON public.overhead_monthly
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_import_jobs
+  AFTER INSERT OR UPDATE ON public.import_jobs
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_recipes
-  BEFORE UPDATE ON public.recipes
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_sales_data
+  AFTER INSERT OR DELETE ON public.sales_data
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
 
-CREATE TRIGGER set_updated_at_recipe_items
-  BEFORE UPDATE ON public.recipe_items
-  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+CREATE TRIGGER audit_competitors
+  AFTER INSERT OR UPDATE OR DELETE ON public.competitors
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
+CREATE TRIGGER audit_competitor_prices
+  AFTER INSERT ON public.competitor_prices
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
+
+CREATE TRIGGER audit_action_items
+  AFTER INSERT OR UPDATE OR DELETE ON public.action_items
+  FOR EACH ROW EXECUTE FUNCTION public.audit_trigger_func();
